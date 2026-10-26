@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="theme-color" content="#07090d">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Спідометр">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>GPS Спідометр</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -35,6 +41,12 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 @keyframes pulse{50%{opacity:.3}}
 .unit-toggle{font-family:var(--f-display);background:var(--panel);border:1px solid var(--line);color:var(--fg);
   border-radius:8px;padding:6px 10px;font-size:13px;letter-spacing:.05em;cursor:pointer}
+.unit-toggle.install{white-space:nowrap;background:var(--accent);border-color:var(--accent);color:#120800;font-weight:700}
+.ios-tip{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:2000;
+  max-width:520px;margin:0 auto;background:var(--panel);border:1px solid var(--accent);border-radius:14px;
+  padding:14px 40px 14px 16px;font-size:14px;line-height:1.45;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+.ios-tip b{color:var(--accent2)}
+.ios-tip button{position:absolute;top:8px;right:8px;background:none;border:0;color:var(--dim);font-size:20px;cursor:pointer}
 
 .gauge-wrap{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center}
 #gauge{width:100%;height:100%;max-height:440px}
@@ -110,6 +122,7 @@ body.hud .controls{opacity:.35}
   <header>
     <div class="gps"><div class="dot" id="dot"></div><span id="gpsText">GPS вимкнено</span></div>
     <div class="head-btns">
+      <button class="unit-toggle install" id="installBtn" hidden>⬇ ДОДАТИ</button>
       <button class="unit-toggle" id="mapBtn">КАРТА</button>
       <button class="unit-toggle" id="unitBtn" aria-label="Змінити одиниці">KM/H</button>
     </div>
@@ -508,6 +521,52 @@ body.hud .controls{opacity:.35}
 
   addEventListener('resize', resize);
   applyUnits(); resize(); requestAnimationFrame(tick);
+})();
+
+// ---------- install as an app (PWA) ----------
+(function(){
+  const btn = document.getElementById('installBtn');
+  const standalone = matchMedia('(display-mode: standalone)').matches ||
+                     matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+
+  if ('serviceWorker' in navigator && isSecureContext) {
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }
+  if (standalone) return;
+
+  // Android / Chrome / Edge: native install prompt
+  let deferred = null;
+  addEventListener('beforeinstallprompt', e => {
+    e.preventDefault(); deferred = e; btn.hidden = false;
+  });
+  addEventListener('appinstalled', () => { deferred = null; btn.hidden = true; });
+
+  // iPhone / iPad: no install prompt — show how to add it via Share
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS) btn.hidden = false;
+
+  function iosTip(){
+    if (document.querySelector('.ios-tip')) return;
+    const d = document.createElement('div');
+    d.className = 'ios-tip';
+    d.innerHTML = 'Щоб встановити на iPhone: відкрий сторінку в <b>Safari</b>, натисни <b>Поділитися</b> ' +
+      '(квадрат зі стрілкою вгору) → <b>На початковий екран</b> → <b>Додати</b>.' +
+      '<button aria-label="Закрити">×</button>';
+    d.querySelector('button').onclick = () => d.remove();
+    document.body.appendChild(d);
+  }
+
+  btn.onclick = async () => {
+    if (deferred) {
+      deferred.prompt();
+      const r = await deferred.userChoice;
+      deferred = null;
+      if (r.outcome === 'accepted') btn.hidden = true;
+    } else if (isIOS) {
+      iosTip();
+    }
+  };
 })();
 </script>
 </body>
