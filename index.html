@@ -280,10 +280,43 @@ body.hud .controls{opacity:.35}
     ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(cx+Math.cos(a)*R, cy+Math.sin(a)*R, R*0.045, 0, 7); ctx.fill();
   }
 
+  // ---------- prediction between GPS fixes ----------
+  // GPS gives ~1 fix/sec, so between fixes we extrapolate with the current
+  // acceleration. This hides most of the "speed catches up a second later" lag.
+  let fix = null;          // {kmh, at, acc}  at = performance.now() when the fix arrived
+  const PREDICT_MAX = 1.2; // s — never extrapolate further than this
+  function setFix(kmh, srcT){
+    const now = performance.now();
+    let acc = 0;
+    if(fix){
+      const dt = (srcT && fix.srcT) ? (srcT - fix.srcT)/1000 : (now - fix.at)/1000;
+      if(dt > 0.2 && dt < 3){
+        acc = (kmh - fix.kmh)/dt;                       // km/h per second
+        acc = Math.max(-35, Math.min(25, acc));         // physical limits of a car
+        acc = fix.acc*0.35 + acc*0.65;                  // light smoothing vs GPS noise
+      }
+    }
+    if(kmh === 0) acc = 0;
+    fix = {kmh, at:now, srcT, acc};
+  }
+  function predicted(){
+    if(!fix) return target;
+    const age = (performance.now() - fix.at)/1000;
+    if(age > 3) return fix.kmh;                        // signal stale — just hold
+    const a = Math.min(age, PREDICT_MAX);
+    // fade prediction out past PREDICT_MAX so a missed fix doesn't run away
+    const fade = age > PREDICT_MAX ? Math.max(0, 1 - (age-PREDICT_MAX)/1.5) : 1;
+    return Math.max(0, fix.kmh + fix.acc*a*fade);
+  }
+
   // ---------- animation loop ----------
+  let lastFrame = performance.now();
   function tick(){
-    shown += (target-shown)*0.18;
-    if(Math.abs(target-shown)<0.05) shown=target;
+    const now = performance.now(), dt = Math.min(0.1, (now-lastFrame)/1000); lastFrame = now;
+    const goal = predicted();
+    // same responsiveness at 30, 60 or 120 fps (τ ≈ 70 ms)
+    shown += (goal-shown)*(1 - Math.exp(-dt/0.07));
+    if(Math.abs(goal-shown)<0.05) shown=goal;
     const s = Math.round(conv(shown));
     $('speed').textContent = s;
     $('speed').classList.toggle('over', limitKmh>0 && shown>limitKmh);
@@ -304,7 +337,9 @@ body.hud .controls{opacity:.35}
   function onPos(p){
     const c = p.coords, t = p.timestamp || Date.now();
     const cur = {lat:c.latitude, lon:c.longitude, t};
-    let kmh = (c.speed!=null && !isNaN(c.speed)) ? c.speed*3.6 : null;
+    // c.speed is Doppler-based (instant). Position-diff speed lags by ~half a fix interval,
+    // so it's only a fallback when the phone doesn't report c.speed.
+    let kmh = (c.speed!=null && !isNaN(c.speed) && c.speed>=0) ? c.speed*3.6 : null;
     if(last){
       const dt=(t-last.t)/1000, d=haversine(last,cur);
       if(kmh===null && dt>0) kmh = d/dt*3.6;
@@ -316,6 +351,7 @@ body.hud .controls{opacity:.35}
     last = cur;
     if((c.accuracy||0) < 40) addPoint(cur.lat, cur.lon, kmh);
     if(!trip.startT) trip.startT = Date.now();
+    setFix(kmh, t);
     update(kmh, c.heading, c.altitude);
     setStatus('ok', `GPS ±${Math.round(c.accuracy)} м`);
     $('msg').textContent=''; $('msg').className='msg';
@@ -376,7 +412,7 @@ body.hud .controls{opacity:.35}
   }
   function stop(){
     if(watchId!==null) navigator.geolocation.clearWatch(watchId);
-    watchId=null; target=0; last=null;
+    watchId=null; target=0; last=null; fix=null;
     setStatus('', 'GPS вимкнено');
     $('startBtn').innerHTML='Старт<span>GPS</span>';
     releaseWake();
@@ -402,10 +438,11 @@ body.hud .controls{opacity:.35}
       demoPos.lon += m*Math.sin(hr)/(111320*Math.cos(demoPos.lat*Math.PI/180));
       addPoint(demoPos.lat, demoPos.lon, kmh);
       saveTripSoon();
+      setFix(kmh, null);
       update(kmh, demoHeading, 180+Math.sin(t/10)*20);
     },500);
   }
-  function stopDemo(){ if(demoTimer){clearInterval(demoTimer); demoTimer=null; target=0; $('demoBtn').classList.remove('on'); setStatus('','GPS вимкнено');} }
+  function stopDemo(){ if(demoTimer){clearInterval(demoTimer); demoTimer=null; target=0; fix=null; $('demoBtn').classList.remove('on'); setStatus('','GPS вимкнено');} }
 
   // ---------- extras ----------
   async function keepAwake(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
