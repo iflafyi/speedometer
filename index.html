@@ -8,6 +8,8 @@
 <title>GPS Спідометр</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 /* Layout: one-screen dashboard — gauge on top, trip stats grid below, controls bar at the bottom */
 :root{
@@ -18,6 +20,7 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;
   -webkit-tap-highlight-color:transparent;user-select:none;overflow:hidden;
@@ -75,6 +78,29 @@ body.hud .speed{font-size:min(55vw,48vh);color:var(--accent2)}
 body.hud .unit{font-size:24px}
 body.hud .controls{opacity:.35}
 
+.head-btns{display:flex;gap:6px}
+
+/* Route map overlay */
+.map-screen{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.map-top{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px))}
+.map-top h2{margin:0;font-family:var(--f-display);font-size:18px;letter-spacing:.08em;text-transform:uppercase}
+#map{flex:1;min-height:0;background:#0d1117}
+.map-info{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border-top:1px solid var(--line)}
+.map-info .stat{padding:9px 12px}
+.legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);
+  padding:8px max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px))}
+.legend .bar{flex:1;height:6px;border-radius:3px;background:linear-gradient(90deg,#3ddc84,#ffd23f,#ff8a1f,#ff3b3b)}
+.map-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;
+  padding:24px;color:var(--dim);font-size:14px;line-height:1.5;z-index:500;pointer-events:none}
+.map-wrap{position:relative;flex:1;min-height:0;display:flex}
+.leaflet-container{font-family:var(--f-body)}
+.dark-tiles{filter:invert(1) hue-rotate(185deg) brightness(.85) contrast(.9) saturate(.6)}
+.leaflet-control-attribution{background:rgba(7,9,13,.75)!important;color:var(--dim)!important}
+.leaflet-control-attribution a{color:var(--accent2)!important}
+.leaflet-bar a{background:var(--panel)!important;color:var(--fg)!important;border-color:var(--line)!important}
+
 @media (max-height:640px){ .stat .v{font-size:18px} .stat{padding:7px 8px} .btn{padding:9px 4px} .limit-row{padding:5px 10px} .sign{width:34px;height:34px} }
 @media (prefers-reduced-motion:reduce){ .dot.wait{animation:none} }
 </style>
@@ -83,7 +109,10 @@ body.hud .controls{opacity:.35}
 <div class="app">
   <header>
     <div class="gps"><div class="dot" id="dot"></div><span id="gpsText">GPS вимкнено</span></div>
-    <button class="unit-toggle" id="unitBtn" aria-label="Змінити одиниці">KM/H</button>
+    <div class="head-btns">
+      <button class="unit-toggle" id="mapBtn">КАРТА</button>
+      <button class="unit-toggle" id="unitBtn" aria-label="Змінити одиниці">KM/H</button>
+    </div>
   </header>
 
   <div class="gauge-wrap">
@@ -119,6 +148,26 @@ body.hud .controls{opacity:.35}
   <div class="msg" id="msg">Натисни «Старт» і дозволь доступ до геолокації.</div>
 </div>
 
+<div class="map-screen" id="mapScreen" hidden>
+  <div class="map-top">
+    <h2>Маршрут</h2>
+    <div class="head-btns">
+      <button class="unit-toggle" id="fitBtn">ВЕСЬ ТРЕК</button>
+      <button class="unit-toggle" id="closeMap">ЗАКРИТИ</button>
+    </div>
+  </div>
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="map-empty" id="mapEmpty" hidden>Трек ще порожній.<br>Натисни «Старт» і поїдь — маршрут з'явиться тут.<br>Або увімкни «Демо», щоб подивитись.</div>
+  </div>
+  <div class="map-info">
+    <div class="stat"><div class="k">Дистанція</div><div class="v" id="mDist">0</div></div>
+    <div class="stat"><div class="k">Макс.</div><div class="v" id="mMax">0</div></div>
+    <div class="stat"><div class="k">Точок</div><div class="v" id="mPts">0</div></div>
+  </div>
+  <div class="legend"><span>повільно</span><div class="bar"></div><span id="legendMax">130+</span></div>
+</div>
+
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -130,12 +179,37 @@ body.hud .controls{opacity:.35}
   let limitKmh = store.get('limit', 0);
   let watchId = null, demoTimer = null, wakeLock = null;
   let shown = 0, target = 0;                 // km/h
-  let trip = freshTrip();
+  let trip = loadTrip();
   let last = null;                            // last position {lat,lon,t}
+  let demoPos = null, demoHeading = 40;
   let accelStart = null;                      // for 0-100
   let beeped = false, audioCtx = null;
 
-  function freshTrip(){ return {max:0, dist:0, moving:0, startT:null, best0100:null}; }
+  function freshTrip(){ return {max:0, dist:0, moving:0, startT:null, best0100:null, track:[]}; }
+  function loadTrip(){
+    const t = store.get('trip', null);
+    if(!t || typeof t!=='object') return freshTrip();
+    const f = freshTrip(); Object.assign(f, t);
+    if(!Array.isArray(f.track)) f.track = [];
+    f.startT = null;                          // timer restarts after reload
+    return f;
+  }
+  let saveTimer = null;
+  function saveTripSoon(){
+    if(saveTimer) return;
+    saveTimer = setTimeout(()=>{ saveTimer=null; store.set('trip', trip); }, 4000);
+  }
+
+  // ---------- route track ----------
+  const MAX_POINTS = 25000;
+  function addPoint(lat, lon, kmh){
+    const tr = trip.track, prev = tr[tr.length-1];
+    if(prev && haversine({lat:prev[0],lon:prev[1]},{lat,lon}) < 5) return;   // skip jitter
+    tr.push([+lat.toFixed(6), +lon.toFixed(6), Math.round(kmh)]);
+    if(tr.length > MAX_POINTS) tr.splice(0, tr.length - MAX_POINTS);
+    saveTripSoon();
+    if(mapOpen) scheduleMapDraw();
+  }
 
   // ---------- units ----------
   const conv = kmh => mph ? kmh*0.621371 : kmh;
@@ -143,7 +217,7 @@ body.hud .controls{opacity:.35}
   const uDist = () => mph ? 'mi' : 'km';
   function applyUnits(){
     $('unitBtn').textContent = uSpeed(); $('unitLbl').textContent = uSpeed();
-    renderLimitSign(); renderStats(); drawGauge();
+    renderLimitSign(); renderStats(); drawGauge(); if(mapOpen) drawRoute();
   }
 
   // ---------- gauge ----------
@@ -227,6 +301,7 @@ body.hud .controls{opacity:.35}
     if(kmh===null) kmh=0;
     if(kmh<1.5) kmh=0;           // GPS jitter while parked
     last = cur;
+    if((c.accuracy||0) < 40) addPoint(cur.lat, cur.lon, kmh);
     if(!trip.startT) trip.startT = Date.now();
     update(kmh, c.heading, c.altitude);
     setStatus('ok', `GPS ±${Math.round(c.accuracy)} м`);
@@ -304,8 +379,17 @@ body.hud .controls{opacity:.35}
       t+=0.5;
       const cyc=t%40;
       const kmh = cyc<12 ? 100*(1-Math.exp(-cyc/4.5))*1.1 : cyc<28 ? 95+Math.sin(t)*12 : Math.max(0,95-(cyc-28)*9);
-      trip.dist += kmh/3.6*0.5; if(kmh>2) trip.moving+=0.5;
-      update(kmh, (t*6)%360, 180+Math.sin(t/10)*20);
+      const m = kmh/3.6*0.5;
+      trip.dist += m; if(kmh>2) trip.moving+=0.5;
+      // fake route: wandering drive starting in central Warsaw
+      if(!demoPos){ const lp = trip.track[trip.track.length-1]; demoPos = lp ? {lat:lp[0],lon:lp[1]} : {lat:52.2297,lon:21.0122}; }
+      demoHeading = (demoHeading + Math.sin(t/7)*4 + 360) % 360;
+      const hr = demoHeading*Math.PI/180;
+      demoPos.lat += m*Math.cos(hr)/111320;
+      demoPos.lon += m*Math.sin(hr)/(111320*Math.cos(demoPos.lat*Math.PI/180));
+      addPoint(demoPos.lat, demoPos.lon, kmh);
+      saveTripSoon();
+      update(kmh, demoHeading, 180+Math.sin(t/10)*20);
     },500);
   }
   function stopDemo(){ if(demoTimer){clearInterval(demoTimer); demoTimer=null; target=0; $('demoBtn').classList.remove('on'); setStatus('','GPS вимкнено');} }
@@ -330,10 +414,93 @@ body.hud .controls{opacity:.35}
     else { s.className='sign off'; s.textContent='OFF'; }
   }
 
+  // ---------- route map ----------
+  let map = null, routeLayer = null, endMarker = null, mapOpen = false, drawTimer = null, follow = true;
+  function speedColor(kmh){
+    // green → yellow → orange → red across 0..130 km/h
+    const stops = [[0,[61,220,132]],[50,[255,210,63]],[90,[255,138,31]],[130,[255,59,59]]];
+    const v = Math.max(0, Math.min(130, kmh));
+    for(let i=1;i<stops.length;i++){
+      if(v <= stops[i][0]){
+        const [a,ca]=stops[i-1], [b,cb]=stops[i], k=(v-a)/(b-a);
+        return `rgb(${ca.map((x,j)=>Math.round(x+(cb[j]-x)*k)).join(',')})`;
+      }
+    }
+    return 'rgb(255,59,59)';
+  }
+  const bucket = kmh => Math.min(13, Math.floor(Math.max(0,kmh)/10));   // 10 km/h colour steps
+
+  function openMap(){
+    $('mapScreen').hidden = false; mapOpen = true; follow = true;
+    if(typeof L === 'undefined'){
+      $('mapEmpty').hidden = false;
+      $('mapEmpty').innerHTML = 'Карта не завантажилась.<br>Перевір інтернет і відкрий ще раз.';
+      return;
+    }
+    if(!map){
+      map = L.map('map', {zoomControl:true, attributionControl:true}).setView([52.2297,21.0122], 13);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom:19, className:'dark-tiles',
+        attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }).addTo(map);
+      routeLayer = L.layerGroup().addTo(map);
+      map.on('dragstart', () => { follow = false; });
+    }
+    setTimeout(() => { map.invalidateSize(); drawRoute(); fitTrack(false); }, 50);
+  }
+  function closeMap(){ $('mapScreen').hidden = true; mapOpen = false; }
+  function scheduleMapDraw(){ if(drawTimer) return; drawTimer = setTimeout(() => { drawTimer=null; drawRoute(); }, 1500); }
+
+  function drawRoute(){
+    const tr = trip.track;
+    const u = uSpeed().toLowerCase();
+    const d = mph ? trip.dist/1609.34 : trip.dist/1000;
+    $('mDist').innerHTML = `${d.toFixed(2)}<small>${uDist()}</small>`;
+    $('mMax').innerHTML = `${Math.round(conv(trip.max))}<small>${u}</small>`;
+    $('mPts').textContent = tr.length;
+    $('legendMax').textContent = mph ? '80+ mph' : '130+ km/h';
+    $('mapEmpty').hidden = tr.length > 1;
+    if(!map) return;
+    routeLayer.clearLayers(); endMarker = null;
+    if(tr.length < 2) return;
+
+    // join consecutive points of the same speed band into one polyline
+    let seg = [[tr[0][0],tr[0][1]]], band = bucket(tr[1][2]);
+    const flush = () => {
+      if(seg.length < 2) return;
+      L.polyline(seg, {color:'#000', weight:9, opacity:.45, interactive:false}).addTo(routeLayer);
+      L.polyline(seg, {color:speedColor(band*10+5), weight:5, opacity:1, lineCap:'round'}).addTo(routeLayer);
+    };
+    for(let i=1;i<tr.length;i++){
+      const b = bucket(tr[i][2]);
+      if(b !== band){ seg.push([tr[i][0],tr[i][1]]); flush(); seg = [[tr[i][0],tr[i][1]]]; band = b; }
+      else seg.push([tr[i][0],tr[i][1]]);
+    }
+    flush();
+
+    const s = tr[0], e = tr[tr.length-1];
+    L.circleMarker([s[0],s[1]], {radius:7, color:'#fff', weight:2, fillColor:'#3ddc84', fillOpacity:1})
+      .bindTooltip('Старт').addTo(routeLayer);
+    endMarker = L.circleMarker([e[0],e[1]], {radius:8, color:'#1a0d00', weight:3, fillColor:'#ff8a1f', fillOpacity:1})
+      .bindTooltip(`${Math.round(conv(e[2]))} ${u}`).addTo(routeLayer);
+    if(follow && (watchId!==null || demoTimer)) map.panTo([e[0],e[1]], {animate:true});
+  }
+  function fitTrack(resetFollow){
+    if(!map) return;
+    if(resetFollow) follow = true;
+    const tr = trip.track;
+    if(tr.length > 1) map.fitBounds(L.latLngBounds(tr.map(p=>[p[0],p[1]])), {padding:[30,30], maxZoom:17});
+    else if(tr.length === 1) map.setView([tr[0][0],tr[0][1]], 16);
+  }
+
   // ---------- wiring ----------
   $('startBtn').onclick = () => { if(!audioCtx){ try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch{} } start(); };
   $('demoBtn').onclick = startDemo;
-  $('resetBtn').onclick = () => { trip=freshTrip(); if(watchId!==null||demoTimer) trip.startT=Date.now(); last=null; renderStats(); };
+  $('resetBtn').onclick = () => { trip=freshTrip(); if(watchId!==null||demoTimer) trip.startT=Date.now(); last=null; demoPos=null; store.set('trip',trip); renderStats(); };
+  $('mapBtn').onclick = openMap;
+  $('closeMap').onclick = closeMap;
+  $('fitBtn').onclick = () => fitTrack(true);
+  addEventListener('pagehide', () => store.set('trip', trip));
   $('unitBtn').onclick = () => { mph=!mph; store.set('mph',mph); applyUnits(); };
   $('hudBtn').onclick = () => { document.body.classList.toggle('hud'); $('hudBtn').classList.toggle('on'); };
   $('limit').value = limitKmh;
