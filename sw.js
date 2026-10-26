@@ -1,6 +1,6 @@
 // Offline cache for GPS Спідометр.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const APP_CACHE = 'speedo-app-' + VERSION;
 const CDN_CACHE = 'speedo-cdn';
 const TILE_CACHE = 'speedo-tiles';

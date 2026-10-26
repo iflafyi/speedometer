@@ -63,8 +63,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .stat .v{font-family:var(--f-display);font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .stat .v small{font-size:12px;color:var(--dim);font-weight:400;margin-left:3px}
 
-.controls{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
-.btn{font-family:var(--f-body);font-weight:600;font-size:13px;background:var(--panel);color:var(--fg);
+.controls{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.btn{font-family:var(--f-body);font-weight:600;font-size:12.5px;white-space:nowrap;min-width:0;background:var(--panel);color:var(--fg);
   border:1px solid var(--line);border-radius:12px;padding:12px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px}
 .btn span{font-size:10.5px;color:var(--dim);font-weight:400}
 .btn.primary{background:var(--accent);color:#1a0d00;border-color:var(--accent)}
@@ -155,6 +155,7 @@ body.hud .controls{opacity:.35}
   <div class="controls">
     <button class="btn primary" id="startBtn">Старт<span>GPS</span></button>
     <button class="btn" id="resetBtn">Скинути<span>поїздку</span></button>
+    <button class="btn" id="imuBtn" aria-pressed="false">Датчик<span>руху</span></button>
     <button class="btn" id="hudBtn">HUD<span>на скло</span></button>
     <button class="btn" id="demoBtn">Демо<span>тест</span></button>
   </div>
@@ -298,8 +299,10 @@ body.hud .controls{opacity:.35}
     }
     if(kmh === 0) acc = 0;
     fix = {kmh, at:now, srcT, acc};
+    imuOnFix(kmh, now);
   }
   function predicted(){
+    if(imuActive()) return imu.v;
     if(!fix) return target;
     const age = (performance.now() - fix.at)/1000;
     if(age > 3) return fix.kmh;                        // signal stale — just hold
@@ -308,6 +311,221 @@ body.hud .controls{opacity:.35}
     const fade = age > PREDICT_MAX ? Math.max(0, 1 - (age-PREDICT_MAX)/1.5) : 1;
     return Math.max(0, fix.kmh + fix.acc*a*fade);
   }
+
+  // ---------- motion sensor (accelerometer) fusion ----------
+  // The phone has no gyroscope, so only accelerationIncludingGravity is available.
+  // In a holder the phone doesn't move relative to the car, so in the phone's own
+  // frame gravity is a (nearly) constant vector and the car's forward direction is
+  // another constant vector. Both are learned from GPS while driving; after that
+  // the forward acceleration is integrated between GPS fixes, and every fix pulls
+  // the result back (and re-estimates the sensor bias, e.g. from road slope).
+  const v3 = {
+    sub:(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]],
+    add:(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]],
+    mul:(a,k)=>[a[0]*k,a[1]*k,a[2]*k],
+    dot:(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
+    len:a=>Math.hypot(a[0],a[1],a[2]),
+  };
+  const IMU_READY_W = 6;      // Σ a_gps² (m/s²)² needed before trusting the forward axis
+  const IMU_READY_K = 15;     // and at least this many GPS intervals with real acceleration/braking
+  const IMU_GPS_GAIN = 0.25;  // how hard each GPS fix pulls the fused speed (GPS itself is a bit late)
+  const imu = {
+    on: store.get('imuOn', false),
+    alive: false,             // sensor events are arriving
+    g: null,                  // gravity in phone frame, m/s²
+    S: [0,0,0], W: 0, N: 0, K: 0, // Σ a_gps·h, Σ a_gps², Σ |a_gps|·|h|, informative samples
+    f: null,                  // unit forward axis in phone frame
+    bias: 0,                  // m/s², what the sensor reads on top of real forward accel
+    aF: 0,                    // smoothed forward accel, m/s²
+    acc: [0,0,0], accN: 0,    // linear accel summed since the last GPS fix
+    raw: [0,0,0], rawN: 0,    // raw sensor summed since the last GPS fix
+    prevRaw: null,            // mean raw over the previous GPS interval
+    gN: 0,                    // how many confirmed-stationary gravity updates
+    lastFix: null,            // {kmh, at}
+    v: null,                  // fused speed, km/h
+    u: 0,                     // raw integral of sensor accel (never corrected), km/h
+    hist: [],                 // recent [t, v, u] (to look back by the GPS delay)
+    lagSse: new Array(11).fill(0), lagN: 0, lag: 0.4,  // GPS delay estimate, s (0…1)
+    lastT: 0, moved: 0,
+  };
+  (function loadImuCal(){
+    const c = store.get('imuCal', null);
+    if(c && Array.isArray(c.g) && Array.isArray(c.S) && c.g.length===3 && c.S.length===3){
+      imu.g=c.g; imu.gN=Math.max(3, +c.gN||0); imu.S=c.S; imu.W=+c.W||0; imu.N=+c.N||0; imu.K=+c.K||0; imu.bias=+c.bias||0; if(c.lag>=0 && c.lag<=1) imu.lag=+c.lag; updateForward();
+    }
+  })();
+  let imuSaveT = 0;
+  function saveImuCal(force){
+    const now = performance.now();
+    if(!force && now - imuSaveT < 10000) return;
+    imuSaveT = now;
+    if(imu.g) store.set('imuCal', {g:imu.g, gN:imu.gN, S:imu.S, W:imu.W, N:imu.N, K:imu.K, bias:imu.bias, lag:imu.lag});
+  }
+  function resetImuCal(){
+    imu.S=[0,0,0]; imu.W=0; imu.N=0; imu.K=0; imu.f=null; imu.bias=0; imu.v=null;
+  }
+  function updateForward(){
+    if(!imu.g || imu.W < 0.3){ imu.f=null; return; }
+    // keep the axis horizontal: drop its component along gravity (removes bumps)
+    const gl = v3.len(imu.g); if(!gl){ imu.f=null; return; }
+    const gu = v3.mul(imu.g, 1/gl);
+    let f = v3.sub(imu.S, v3.mul(gu, v3.dot(imu.S, gu)));
+    const l = v3.len(f);
+    imu.f = l > 1e-6 ? v3.mul(f, 1/l) : null;
+  }
+  function imuReady(){
+    return !!imu.f && imu.gN >= 3 && imu.W >= IMU_READY_W && imu.K >= IMU_READY_K && imu.N > 0 && v3.len(imu.S)/imu.N > 0.35;
+  }
+  function imuActive(){
+    if(!imu.on || !imu.alive || imu.v===null || !fix || demoTimer || watchId===null) return false;
+    return imuReady() && (performance.now() - fix.at) < 2500;
+  }
+
+  function onMotion(e){
+    const a = e.accelerationIncludingGravity;
+    if(!a || a.x==null || a.y==null || a.z==null) return;
+    imu.alive = true;
+    const now = performance.now();
+    const dt = imu.lastT ? Math.min(0.1, (now - imu.lastT)/1000) : 0;
+    imu.lastT = now;
+    const raw = [a.x, a.y, a.z];
+    if(!imu.g){ imu.g = raw.slice(); return; }
+
+    const fresh = fix && (now - fix.at) < 2500;
+    const parked = fresh && fix.kmh === 0;
+    imu.raw = v3.add(imu.raw, raw); imu.rawN++;
+    // holder moved? (gravity direction changed a lot while standing still)
+    if(parked && dt > 0){
+      const cos = v3.dot(raw, imu.g)/(v3.len(raw)*v3.len(imu.g) || 1);
+      if(cos < 0.94){                                   // > ~20°
+        imu.moved += dt;
+        if(imu.moved > 2){ imu.g = raw.slice(); imu.gN = 0; resetImuCal(); imu.moved = 0; saveImuCal(true); }
+      } else imu.moved = 0;
+    }
+
+    const lin = v3.sub(raw, imu.g);
+    imu.acc = v3.add(imu.acc, lin); imu.accN++;
+    if(!imu.f || !dt) return;
+
+    const aRaw = v3.dot(lin, imu.f) - imu.bias;
+    imu.aF += (aRaw - imu.aF)*(1 - Math.exp(-dt/0.12));  // filter engine/road vibration
+    imu.u += imu.aF*3.6*dt;
+
+    if(imu.v !== null && fresh && imuReady()){
+      if(fix.kmh === 0 && imu.aF < 0.8 && imu.v < 3) imu.v = 0;   // standing still
+      else imu.v += imu.aF*3.6*dt;
+      // never drift far from the last GPS reading
+      const age = (now - fix.at)/1000, lim = 4 + 25*age;
+      imu.v = Math.max(0, Math.max(fix.kmh - lim, Math.min(fix.kmh + lim, imu.v)));
+    }
+    imu.hist.push([now, imu.v, imu.u]);
+    while(imu.hist.length && now - imu.hist[0][0] > 3000) imu.hist.shift();
+  }
+  function histAt(t, k){                               // value k (1 = fused, 2 = raw integral) at time t
+    const h = imu.hist; if(!h.length || t < h[0][0]) return null;
+    for(let i=h.length-1;i>=0;i--) if(h[i][0] <= t) return h[i][k];
+    return null;
+  }
+  // GPS speed describes the car as it was ~0.2–0.8 s ago. Find that delay: the change of
+  // GPS speed between two fixes should match the change of the (uncorrected) sensor
+  // integral over the same window shifted back by the delay. Offsets cancel out, so
+  // only the timing of speed-ups and slow-downs decides.
+  function learnLag(kmh, prev, now){
+    if(!prev || kmh < 3 || prev.kmh < 3) return;
+    const dG = kmh - prev.kmh, r = [];
+    for(let i=0;i<=10;i++){
+      const a = histAt(now - i*100, 2), b = histAt(prev.at - i*100, 2);
+      if(a===null || b===null || a===undefined || b===undefined) return;
+      r.push((dG - (a - b))**2);
+    }
+    const spread = Math.max(...r) - Math.min(...r);
+    if(spread < 0.5) return;                           // steady driving says nothing about delay
+    for(let i=0;i<=10;i++) imu.lagSse[i] = imu.lagSse[i]*0.95 + r[i];
+    if(++imu.lagN >= 8){
+      let best = 0; for(let i=1;i<=10;i++) if(imu.lagSse[i] < imu.lagSse[best]) best = i;
+      imu.lag += (best/10 - imu.lag)*0.25;
+    }
+  }
+
+  function imuOnFix(kmh, now){
+    if(demoTimer || !imu.on) return;
+    const prev = imu.lastFix;
+    if(prev && imu.g && imu.accN > 5){
+      const dt = (now - prev.at)/1000;
+      if(dt > 0.3 && dt < 2.5){
+        const aG = (kmh - prev.kmh)/3.6/dt;                // m/s² from GPS
+        const h = v3.mul(imu.acc, 1/imu.accN);              // mean sensor accel over the same interval
+        if(Math.abs(aG) < 6){
+          // learn forward axis; old data fades only as new informative samples arrive
+          const lam = 1 - 0.02*Math.min(1, aG*aG);
+          imu.S = v3.add(v3.mul(imu.S, lam), v3.mul(h, aG));
+          imu.W = imu.W*lam + aG*aG;
+          imu.N = imu.N*lam + Math.abs(aG)*v3.len(h);
+          if(Math.abs(aG) > 0.4) imu.K = Math.min(1000, imu.K + 1);
+          updateForward();
+        }
+      }
+    }
+    // gravity: GPS is ~0.5 s late, so a "0 km/h" fix doesn't prove the car is still
+    // standing right now. Use the interval one fix back, when two zero fixes enclose it.
+    const rawMean = imu.rawN > 5 ? v3.mul(imu.raw, 1/imu.rawN) : null;
+    if(kmh === 0 && prev && prev.kmh === 0 && imu.prevRaw && (now - prev.at) < 2500){
+      imu.g = v3.add(imu.g, v3.mul(v3.sub(imu.prevRaw, imu.g), imu.gN < 3 ? 1 : 0.3));
+      imu.gN = Math.min(1000, imu.gN + 1);
+    }
+    imu.prevRaw = rawMean;
+    imu.acc = [0,0,0]; imu.accN = 0; imu.raw = [0,0,0]; imu.rawN = 0;
+    imu.lastFix = {kmh, at:now};
+    if(imuReady()) learnLag(kmh, prev, now);
+
+    // pull the fused speed toward GPS
+    if(imu.v === null || (now - (prev ? prev.at : 0)) > 3000) imu.v = kmh;
+    else if(kmh === 0 && imu.aF < 0.8) imu.v = 0;
+    else {
+      // compare GPS with what we showed at the moment GPS actually measured
+      const then = imuReady() ? histAt(now - imu.lag*1000, 1) : null;
+      const err = kmh - (then==null ? imu.v : then);                  // km/h
+      imu.v += err*IMU_GPS_GAIN;
+      // a lasting error means the sensor reads slightly off (road slope, tilt): fix the bias
+      if(imuReady() && kmh > 3){
+        imu.bias -= Math.max(-3, Math.min(3, err))/3.6*0.06;
+        imu.bias = Math.max(-1.5, Math.min(1.5, imu.bias));
+      }
+    }
+    saveImuCal(false);
+  }
+
+  async function setImu(on){
+    if(on){
+      if(typeof DeviceMotionEvent === 'undefined'){ showMsg('Цей браузер не дає доступу до датчика руху.', true); return; }
+      if(typeof DeviceMotionEvent.requestPermission === 'function'){   // iPhone
+        try{ if(await DeviceMotionEvent.requestPermission() !== 'granted'){ showMsg('Доступ до датчика руху не надано.', true); return; } }
+        catch{ showMsg('Не вдалося отримати доступ до датчика руху.', true); return; }
+      }
+      addEventListener('devicemotion', onMotion);
+      setTimeout(() => {
+        if(imu.on && !imu.alive) showMsg('Датчик руху не надсилає даних — працюю тільки по GPS.', true);
+      }, 2500);
+      if(!imuReady()) showMsg('Датчик руху: поїзди звичайно 1–2 хв (розгони, гальмування) — він відкалібрується сам.', false);
+    } else {
+      removeEventListener('devicemotion', onMotion);
+      imu.alive = false; imu.v = null; imu.lastT = 0; imu.hist = []; imu.aF = 0;
+      saveImuCal(true);
+    }
+    imu.on = on; store.set('imuOn', on); renderImuBtn();
+  }
+  function renderImuBtn(){
+    const b = $('imuBtn'); if(!b) return;
+    b.classList.toggle('on', imu.on); b.setAttribute('aria-pressed', imu.on);
+    let s = 'руху';
+    if(imu.on){
+      if(!imu.alive) s = 'немає';
+      else if(imuReady()) s = imuActive() ? 'активний' : 'готовий';
+      else s = 'кал. ' + Math.round(Math.min(0.99, Math.min(imu.W/IMU_READY_W, imu.K/IMU_READY_K))*100) + '%';
+    }
+    b.innerHTML = 'Датчик<span>' + s + '</span>';
+  }
+  function showMsg(t, err){ $('msg').textContent = t; $('msg').className = err ? 'msg err' : 'msg'; }
 
   // ---------- animation loop ----------
   let lastFrame = performance.now();
@@ -393,6 +611,7 @@ body.hud .controls{opacity:.35}
     $('s0100').innerHTML = trip.best0100 ? `${trip.best0100.toFixed(1)}<small>с</small>` : '—';
   }
   setInterval(()=>{
+    renderImuBtn();
     if(!trip.startT){ $('sTime').textContent='0:00'; return; }
     const s=Math.floor((Date.now()-trip.startT)/1000), h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=s%60;
     $('sTime').textContent = h ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${m}:${String(ss).padStart(2,'0')}`;
@@ -412,7 +631,7 @@ body.hud .controls{opacity:.35}
   }
   function stop(){
     if(watchId!==null) navigator.geolocation.clearWatch(watchId);
-    watchId=null; target=0; last=null; fix=null;
+    watchId=null; target=0; last=null; fix=null; imu.lastFix=null; imu.v=null; imu.hist=[];
     setStatus('', 'GPS вимкнено');
     $('startBtn').innerHTML='Старт<span>GPS</span>';
     releaseWake();
@@ -550,13 +769,23 @@ body.hud .controls{opacity:.35}
   $('mapBtn').onclick = openMap;
   $('closeMap').onclick = closeMap;
   $('fitBtn').onclick = () => fitTrack(true);
-  addEventListener('pagehide', () => store.set('trip', trip));
+  addEventListener('pagehide', () => { store.set('trip', trip); saveImuCal(true); });
   $('unitBtn').onclick = () => { mph=!mph; store.set('mph',mph); applyUnits(); };
+  $('imuBtn').onclick = () => setImu(!imu.on);
   $('hudBtn').onclick = () => { document.body.classList.toggle('hud'); $('hudBtn').classList.toggle('on'); };
   $('limit').value = limitKmh;
   $('limit').oninput = e => { limitKmh=+e.target.value; store.set('limit',limitKmh); renderLimitSign(); };
 
   addEventListener('resize', resize);
+  // sensor was on last time: re-enable silently (Android needs no permission prompt)
+  if(imu.on){
+    if(typeof DeviceMotionEvent==='undefined') imu.on=false;
+    else if(typeof DeviceMotionEvent.requestPermission!=='function') addEventListener('devicemotion', onMotion);
+    else DeviceMotionEvent.requestPermission()
+      .then(r => { if(r==='granted') addEventListener('devicemotion', onMotion); else { imu.on=false; renderImuBtn(); } })
+      .catch(() => { imu.on=false; renderImuBtn(); });   // iPhone: needs a tap on the button
+  }
+  renderImuBtn();
   applyUnits(); resize(); requestAnimationFrame(tick);
 })();
 
