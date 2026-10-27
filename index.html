@@ -100,7 +100,7 @@ body.hud .controls{opacity:.35}
   padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
 .map-top{display:flex;align-items:center;justify-content:space-between;gap:10px;
   padding:10px max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px))}
-.map-top h2{margin:0;font-family:var(--f-display);font-size:18px;letter-spacing:.08em;text-transform:uppercase}
+.map-top h2{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-family:var(--f-display);font-size:18px;letter-spacing:.08em;text-transform:uppercase}
 #map{flex:1;min-height:0;background:#0d1117}
 .map-info{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border-top:1px solid var(--line)}
 .map-info .stat{padding:9px 12px}
@@ -115,6 +115,30 @@ body.hud .controls{opacity:.35}
 .leaflet-control-attribution{background:rgba(7,9,13,.75)!important;color:var(--dim)!important}
 .leaflet-control-attribution a{color:var(--accent2)!important}
 .leaflet-bar a{background:var(--panel)!important;color:var(--fg)!important;border-color:var(--line)!important}
+
+/* Trip history screen */
+.hist-screen{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+.map-screen{z-index:60}
+.hist-body{flex:1;min-height:0;overflow-y:auto;width:100%;max-width:560px;margin:0 auto;
+  padding:0 max(12px,env(safe-area-inset-right,0px)) 16px max(12px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;cursor:pointer}
+.card.cur{border-color:var(--accent);cursor:default}
+.card-h{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;color:var(--dim)}
+.card-h b{color:var(--fg);font-weight:600}
+.card-v{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-top:8px}
+.card-v .v{font-family:var(--f-display);font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.card-v .v small{font-size:10px;color:var(--dim);font-weight:400;margin-left:2px}
+.card-v .k{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+.card-a{display:flex;gap:8px;margin-top:10px}
+.odo{font-family:var(--f-display);font-size:36px;font-weight:700;letter-spacing:.04em;font-variant-numeric:tabular-nums;margin:2px 0}
+.odo small{font-size:15px;color:var(--dim);font-weight:400;margin-left:4px}
+.tag{font-size:10px;padding:1px 6px;border-radius:6px;border:1px solid var(--accent);color:var(--accent2);margin-left:6px}
+.mini{font-family:var(--f-body);font-size:12.5px;background:none;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 12px;cursor:pointer}
+.mini.acc{background:var(--accent);border-color:var(--accent);color:#1a0d00;font-weight:700}
+.del{background:none;border:0;color:var(--dim);font-size:20px;line-height:1;padding:2px 6px;cursor:pointer}
+.sec{font-size:11px;color:var(--dim);letter-spacing:.09em;text-transform:uppercase;margin:6px 2px -2px}
+.empty-h{color:var(--dim);text-align:center;padding:16px;font-size:13px;line-height:1.5}
 
 @media (max-height:640px){ .stat .v{font-size:18px} .stat{padding:7px 8px} .btn{padding:9px 4px} .limit-row{padding:5px 10px} .sign{width:34px;height:34px} }
 @media (prefers-reduced-motion:reduce){ .dot.wait{animation:none} }
@@ -148,6 +172,9 @@ body.hud .controls{opacity:.35}
     <div class="stat"><div class="k">У дорозі</div><div class="v" id="sTime">0:00</div></div>
     <div class="stat"><div class="k">0–100</div><div class="v" id="s0100">—</div></div>
     <div class="stat"><div class="k">Висота</div><div class="v" id="sAlt">—</div></div>
+    <div class="stat"><div class="k">Одометр</div><div class="v" id="sOdo">0<small>km</small></div></div>
+    <div class="stat"><div class="k">Сьогодні</div><div class="v" id="sToday">0.0<small>km</small></div></div>
+    <div class="stat"><div class="k">Макс. G</div><div class="v" id="sMaxG">—</div></div>
   </div>
 
   <div class="limit-row">
@@ -158,7 +185,7 @@ body.hud .controls{opacity:.35}
 
   <div class="controls">
     <button class="btn primary" id="startBtn">Старт<span>GPS</span></button>
-    <button class="btn" id="resetBtn">Скинути<span>поїздку</span></button>
+    <button class="btn" id="tripsBtn">Поїздки<span>історія</span></button>
     <button class="btn" id="imuBtn" aria-pressed="false">Датчик<span>руху</span></button>
     <button class="btn" id="hudBtn">HUD<span>на скло</span></button>
     <button class="btn" id="demoBtn">Демо<span>тест</span></button>
@@ -168,7 +195,7 @@ body.hud .controls{opacity:.35}
 
 <div class="map-screen" id="mapScreen" hidden>
   <div class="map-top">
-    <h2>Маршрут</h2>
+    <h2 id="mapTitle">Маршрут</h2>
     <div class="head-btns">
       <button class="unit-toggle" id="fitBtn">ВЕСЬ ТРЕК</button>
       <button class="unit-toggle" id="closeMap">ЗАКРИТИ</button>
@@ -184,6 +211,14 @@ body.hud .controls{opacity:.35}
     <div class="stat"><div class="k">Точок</div><div class="v" id="mPts">0</div></div>
   </div>
   <div class="legend"><span>повільно</span><div class="bar"></div><span id="legendMax">130+</span></div>
+</div>
+
+<div class="hist-screen" id="histScreen" hidden>
+  <div class="map-top">
+    <h2>Поїздки</h2>
+    <div class="head-btns"><button class="unit-toggle" id="closeHist">ЗАКРИТИ</button></div>
+  </div>
+  <div class="hist-body" id="histBody"></div>
 </div>
 
 <script>
@@ -203,7 +238,7 @@ body.hud .controls{opacity:.35}
   let accelStart = null;                      // for 0-100
   let beeped = false, audioCtx = null;
 
-  function freshTrip(){ return {max:0, dist:0, moving:0, startT:null, best0100:null, track:[]}; }
+  function freshTrip(){ return {max:0, dist:0, moving:0, startT:null, best0100:null, maxG:0, created:null, lastT:null, demo:false, track:[]}; }
   function loadTrip(){
     const t = store.get('trip', null);
     if(!t || typeof t!=='object') return freshTrip();
@@ -215,7 +250,66 @@ body.hud .controls{opacity:.35}
   let saveTimer = null;
   function saveTripSoon(){
     if(saveTimer) return;
-    saveTimer = setTimeout(()=>{ saveTimer=null; store.set('trip', trip); }, 4000);
+    saveTimer = setTimeout(()=>{ saveTimer=null; saveAll(); }, 4000);
+  }
+  function saveAll(){ store.set('trip', trip); store.set('odo', odo); store.set('today', today); }
+
+  // ---------- odometer ----------
+  // Real GPS kilometres only (demo doesn't count). `offset` lets the user match the car's own odometer.
+  const odo = Object.assign({m:0, s:0, offset:0}, store.get('odo', {}));
+  const dayKey = () => { const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); };
+  let today = store.get('today', null);
+  if(!today || today.d !== dayKey()) today = {d:dayKey(), m:0};
+  function addDist(m, dt, real){
+    trip.dist += m; trip.moving += dt;
+    const now = Date.now();
+    if(!trip.created) trip.created = now;
+    trip.lastT = now;
+    if(real){
+      odo.m += m; odo.s += dt;
+      if(today.d !== dayKey()) today = {d:dayKey(), m:0};
+      today.m += m;
+    } else trip.demo = true;
+  }
+
+  // ---------- trip history ----------
+  const HIST_MAX = 60, HIST_PTS = 1500;
+  let history = store.get('history', []);
+  if(!Array.isArray(history)) history = [];
+  function thinTrack(tr){
+    if(tr.length <= HIST_PTS) return tr.slice();
+    const k = tr.length/HIST_PTS, out = [];
+    for(let i=0;i<HIST_PTS;i++) out.push(tr[Math.floor(i*k)]);
+    out.push(tr[tr.length-1]);
+    return out;
+  }
+  function saveHistory(){
+    if(history.length > HIST_MAX) history.length = HIST_MAX;
+    while(true){
+      try{ localStorage.setItem('spd_history', JSON.stringify(history)); return; }
+      catch{ if(history.length <= 1) return; history.pop(); }   // storage full: drop the oldest
+    }
+  }
+  // Save the current trip into history (if it's worth keeping). Returns true when saved.
+  function archiveTrip(){
+    if(trip.dist < 100) return false;
+    const end = trip.lastT || Date.now();
+    history.unshift({
+      id: Date.now(), start: trip.created || end - trip.moving*1000, end,
+      dist: Math.round(trip.dist), moving: Math.round(trip.moving), max: Math.round(trip.max),
+      best0100: trip.best0100, maxG: +(trip.maxG||0).toFixed(2), demo: !!trip.demo,
+      track: thinTrack(trip.track)
+    });
+    saveHistory();
+    return true;
+  }
+  function newTrip(){
+    const saved = archiveTrip();
+    trip = freshTrip();
+    if(watchId!==null || demoTimer) trip.startT = Date.now();
+    last = null; demoPos = null; gf.maxHold = 0;
+    saveAll(); renderStats();
+    return saved;
   }
 
   // ---------- route track ----------
@@ -226,7 +320,7 @@ body.hud .controls{opacity:.35}
     tr.push([+lat.toFixed(6), +lon.toFixed(6), Math.round(kmh)]);
     if(tr.length > MAX_POINTS) tr.splice(0, tr.length - MAX_POINTS);
     saveTripSoon();
-    if(mapOpen) scheduleMapDraw();
+    if(mapOpen && !mapTrip) scheduleMapDraw();
   }
 
   // ---------- units ----------
@@ -283,6 +377,7 @@ body.hud .controls{opacity:.35}
     // needle tip marker
     const a = ang(val);
     ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(cx+Math.cos(a)*R, cy+Math.sin(a)*R, R*0.045, 0, 7); ctx.fill();
+    drawG(cx, cy, R, w, h);
   }
 
   // ---------- prediction between GPS fixes ----------
@@ -329,6 +424,7 @@ body.hud .controls{opacity:.35}
     mul:(a,k)=>[a[0]*k,a[1]*k,a[2]*k],
     dot:(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2],
     len:a=>Math.hypot(a[0],a[1],a[2]),
+    cross:(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]],
   };
   const IMU_READY_W = 6;      // Σ a_gps² (m/s²)² needed before trusting the forward axis
   const IMU_READY_K = 15;     // and at least this many GPS intervals with real acceleration/braking
@@ -412,6 +508,7 @@ body.hud .controls{opacity:.35}
     if(!imu.f || !dt) return;
 
     const aRaw = v3.dot(lin, imu.f) - imu.bias;
+    gSensor(lin, aRaw, dt, now);
     imu.aF += (aRaw - imu.aF)*(1 - Math.exp(-dt/0.12));  // filter engine/road vibration
     imu.u += imu.aF*3.6*dt;
 
@@ -531,6 +628,88 @@ body.hud .controls{opacity:.35}
   }
   function showMsg(t, err){ $('msg').textContent = t; $('msg').className = err ? 'msg err' : 'msg'; }
 
+  // ---------- G-force (перевантаження) ----------
+  // Two sources: the calibrated accelerometer (fast, smooth) or, without it, GPS —
+  // forward from the change of speed and sideways from speed × turning rate.
+  // lon: + = speeding up, lat: + = car accelerating to the LEFT (left turn).
+  const G = 9.81;
+  const gf = {sLon:0, sLat:0, sT:0, gLon:0, gLat:0, gT:0, ph:null, phT:0,
+              lon:0, lat:0, live:false, trail:[], trailT:0, maxHold:0};
+  function gSensor(lin, aLon, dt, now){
+    if(!imuReady() || !imu.g) return;
+    const gu = v3.mul(imu.g, 1/(v3.len(imu.g)||1));
+    let side = v3.cross(gu, imu.f); const l = v3.len(side); if(l < 1e-6) return;
+    side = v3.mul(side, 1/l);                                         // horizontal, pointing left
+    const k = 1 - Math.exp(-dt/0.2);                                  // smooth out bumps & engine buzz
+    gf.sLon += (aLon - gf.sLon)*k;
+    gf.sLat += (v3.dot(lin, side) - gf.sLat)*k;
+    gf.sT = now;
+  }
+  function gFromGps(kmh, heading){
+    const now = performance.now(), v = kmh/3.6;
+    let lat = 0;
+    const hOk = heading!=null && !isNaN(heading) && kmh > 8;
+    if(hOk && gf.ph!==null && now - gf.phT < 3000 && now - gf.phT > 200 && kmh > 15){
+      const dh = ((heading - gf.ph + 540) % 360) - 180;              // + = turning right
+      lat = -v * (dh*Math.PI/180) / ((now - gf.phT)/1000);
+    }
+    gf.ph = hOk ? heading : null; gf.phT = now;
+    const lon = fix ? fix.acc/3.6 : 0;
+    gf.gLon = Math.max(-9, Math.min(9, lon));
+    gf.gLat = Math.max(-8, Math.min(8, lat));
+    gf.gT = now;
+  }
+  function gTick(dt, now){
+    const sensor = imu.on && imu.alive && imuReady() && now - gf.sT < 500 && !demoTimer;
+    let tl = 0, tt = 0;
+    gf.live = false;
+    if(sensor){ tl = gf.sLon; tt = gf.sLat; gf.live = true; }
+    else if(now - gf.gT < 3000){ tl = gf.gLon; tt = gf.gLat; gf.live = true; }
+    const k = 1 - Math.exp(-dt/0.15);
+    gf.lon += (tl - gf.lon)*k; gf.lat += (tt - gf.lat)*k;
+    const tot = Math.hypot(gf.lon, gf.lat)/G;
+    // record the max only while really driving, and only if it lasts a moment (ignores single jolts)
+    if(gf.live && shown > 5 && tot < 1.5){
+      gf.maxHold = tot > (trip.maxG||0) ? gf.maxHold + dt : 0;
+      if(gf.maxHold > 0.25){ trip.maxG = tot; renderMaxG(); }
+    }
+    if(now - gf.trailT > 80){
+      gf.trailT = now;
+      gf.trail.push([gf.lat, gf.lon]); if(gf.trail.length > 18) gf.trail.shift();
+    }
+  }
+  function drawG(cx, cy, R, w, h){
+    const gr = Math.max(22, R*0.19);
+    const gx = cx, gy = Math.min(cy + R*0.86, h - gr - 3);
+    const full = 0.5*G;                                   // outer ring = 0.5 g
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#2a323f';
+    ctx.beginPath(); ctx.arc(gx, gy, gr, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(gx, gy, gr/2, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(gx-gr, gy); ctx.lineTo(gx+gr, gy); ctx.moveTo(gx, gy-gr); ctx.lineTo(gx, gy+gr); ctx.stroke();
+    // the dot shows the force you feel: braking → up, accelerating → down, left turn → right
+    const pos = (lat, lon) => {
+      let x = lat/full*gr, y = lon/full*gr; const d = Math.hypot(x,y), m = gr*1.05;
+      if(d > m){ x *= m/d; y *= m/d; }
+      return [gx + x, gy + y];
+    };
+    if(gf.live){
+      gf.trail.forEach((p,i) => {
+        const [x,y] = pos(p[0], p[1]);
+        ctx.fillStyle = `rgba(255,138,31,${(i/gf.trail.length)*0.35})`;
+        ctx.beginPath(); ctx.arc(x, y, gr*0.09, 0, 7); ctx.fill();
+      });
+      const [x,y] = pos(gf.lat, gf.lon);
+      ctx.fillStyle = '#ff8a1f'; ctx.shadowColor='rgba(255,138,31,.7)'; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(x, y, gr*0.13, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+    }
+    ctx.font = `600 ${Math.max(10, gr*0.42)}px "Chakra Petch",sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = gf.live ? '#e8ecf2' : '#5b6576';
+    ctx.fillText(gf.live ? (Math.hypot(gf.lon, gf.lat)/G).toFixed(2) + ' G' : 'G', gx + gr + 8, gy);
+  }
+  function renderMaxG(){ $('sMaxG').innerHTML = trip.maxG > 0.02 ? `${trip.maxG.toFixed(2)}<small>G</small>` : '—'; }
+
   // ---------- animation loop ----------
   let lastFrame = performance.now();
   function tick(){
@@ -539,6 +718,7 @@ body.hud .controls{opacity:.35}
     // same responsiveness at 30, 60 or 120 fps (τ ≈ 70 ms)
     shown += (goal-shown)*(1 - Math.exp(-dt/0.07));
     if(Math.abs(goal-shown)<0.05) shown=goal;
+    gTick(dt, now);
     const s = Math.round(conv(shown));
     $('speed').textContent = s;
     $('speed').classList.toggle('over', limitKmh>0 && shown>limitKmh);
@@ -566,7 +746,7 @@ body.hud .controls{opacity:.35}
       const dt=(t-last.t)/1000, d=haversine(last,cur);
       if(kmh===null && dt>0) kmh = d/dt*3.6;
       // count distance only if accuracy is decent and we're moving
-      if((c.accuracy||0) < 40 && (kmh||0) > 2) { trip.dist += d; trip.moving += dt; }
+      if((c.accuracy||0) < 40 && (kmh||0) > 2) addDist(d, dt, true);
     }
     if(kmh===null) kmh=0;
     if(kmh<1.5) kmh=0;           // GPS jitter while parked
@@ -587,6 +767,7 @@ body.hud .controls{opacity:.35}
 
   function update(kmh, heading, alt){
     target = kmh;
+    gFromGps(kmh, heading);
     if(kmh>trip.max) trip.max=kmh;
     // 0-100 timer
     const now=performance.now();
@@ -613,6 +794,11 @@ body.hud .controls{opacity:.35}
     const d = mph ? trip.dist/1609.34 : trip.dist/1000;
     $('sDist').innerHTML = `${d.toFixed(d<100?2:1)}<small>${uDist()}</small>`;
     $('s0100').innerHTML = trip.best0100 ? `${trip.best0100.toFixed(1)}<small>с</small>` : '—';
+    const od = (odo.m + odo.offset)/(mph?1609.34:1000);
+    $('sOdo').innerHTML = `${od < 1000 ? od.toFixed(1) : Math.floor(od)}<small>${uDist()}</small>`;
+    if(today.d !== dayKey()) today = {d:dayKey(), m:0};
+    $('sToday').innerHTML = `${(today.m/(mph?1609.34:1000)).toFixed(1)}<small>${uDist()}</small>`;
+    renderMaxG();
   }
   setInterval(()=>{
     renderImuBtn();
@@ -628,6 +814,10 @@ body.hud .controls{opacity:.35}
     if(watchId!==null){ stop(); return; }
     if(!('geolocation' in navigator)){ onErr({code:2,message:'Цей браузер не підтримує геолокацію.'}); return; }
     if(!isSecureContext){ $('msg').textContent='Геолокація працює лише через https:// — відкрий сторінку з сайту, а не як файл.'; $('msg').className='msg err'; }
+    // more than 3 h since the last drive → that was a separate trip: put it into history
+    if(trip.lastT && Date.now() - trip.lastT > 3*3600e3 && trip.dist >= 100){
+      newTrip(); showMsg('Попередню поїздку збережено в «Поїздки».', false);
+    }
     setStatus('wait','Пошук супутників…');
     watchId = navigator.geolocation.watchPosition(onPos, onErr, {enableHighAccuracy:true, maximumAge:0, timeout:15000});
     $('startBtn').innerHTML='Стоп<span>GPS</span>';
@@ -652,7 +842,7 @@ body.hud .controls{opacity:.35}
       const cyc=t%40;
       const kmh = cyc<12 ? 100*(1-Math.exp(-cyc/4.5))*1.1 : cyc<28 ? 95+Math.sin(t)*12 : Math.max(0,95-(cyc-28)*9);
       const m = kmh/3.6*0.5;
-      trip.dist += m; if(kmh>2) trip.moving+=0.5;
+      addDist(m, kmh>2 ? 0.5 : 0, false);
       // fake route: wandering drive starting in central Warsaw
       if(!demoPos){ const lp = trip.track[trip.track.length-1]; demoPos = lp ? {lat:lp[0],lon:lp[1]} : {lat:52.2297,lon:21.0122}; }
       demoHeading = (demoHeading + Math.sin(t/7)*4 + 360) % 360;
@@ -722,6 +912,7 @@ body.hud .controls{opacity:.35}
 
   // ---------- route map ----------
   let map = null, routeLayer = null, endMarker = null, mapOpen = false, drawTimer = null, follow = true;
+  let mapTrip = null;                         // null = current trip, otherwise a history entry
   function speedColor(kmh){
     // green → yellow → orange → red across 0..130 km/h
     const stops = [[0,[61,220,132]],[50,[255,210,63]],[90,[255,138,31]],[130,[255,59,59]]];
@@ -736,8 +927,10 @@ body.hud .controls{opacity:.35}
   }
   const bucket = kmh => Math.min(13, Math.floor(Math.max(0,kmh)/10));   // 10 km/h colour steps
 
-  function openMap(){
-    $('mapScreen').hidden = false; mapOpen = true; follow = true;
+  function openMap(entry){
+    mapTrip = entry || null;
+    $('mapTitle').textContent = mapTrip ? new Date(mapTrip.start).toLocaleDateString('uk-UA',{day:'numeric',month:'short'}) + ' ' + fmtHM(mapTrip.start) : 'Маршрут';
+    $('mapScreen').hidden = false; mapOpen = true; follow = !mapTrip;
     if(typeof L === 'undefined'){
       $('mapEmpty').hidden = false;
       $('mapEmpty').innerHTML = 'Карта не завантажилась.<br>Перевір інтернет і відкрий ще раз.';
@@ -754,15 +947,15 @@ body.hud .controls{opacity:.35}
     }
     setTimeout(() => { map.invalidateSize(); drawRoute(); fitTrack(false); }, 50);
   }
-  function closeMap(){ $('mapScreen').hidden = true; mapOpen = false; }
+  function closeMap(){ $('mapScreen').hidden = true; mapOpen = false; mapTrip = null; }
   function scheduleMapDraw(){ if(drawTimer) return; drawTimer = setTimeout(() => { drawTimer=null; drawRoute(); }, 1500); }
 
   function drawRoute(){
-    const tr = trip.track;
+    const T = mapTrip || trip, tr = T.track;
     const u = uSpeed().toLowerCase();
-    const d = mph ? trip.dist/1609.34 : trip.dist/1000;
+    const d = mph ? T.dist/1609.34 : T.dist/1000;
     $('mDist').innerHTML = `${d.toFixed(2)}<small>${uDist()}</small>`;
-    $('mMax').innerHTML = `${Math.round(conv(trip.max))}<small>${u}</small>`;
+    $('mMax').innerHTML = `${Math.round(conv(T.max))}<small>${u}</small>`;
     $('mPts').textContent = tr.length;
     $('legendMax').textContent = mph ? '80+ mph' : '130+ km/h';
     $('mapEmpty').hidden = tr.length > 1;
@@ -789,25 +982,101 @@ body.hud .controls{opacity:.35}
       .bindTooltip('Старт').addTo(routeLayer);
     endMarker = L.circleMarker([e[0],e[1]], {radius:8, color:'#1a0d00', weight:3, fillColor:'#ff8a1f', fillOpacity:1})
       .bindTooltip(`${Math.round(conv(e[2]))} ${u}`).addTo(routeLayer);
-    if(follow && (watchId!==null || demoTimer)) map.panTo([e[0],e[1]], {animate:true});
+    if(follow && !mapTrip && (watchId!==null || demoTimer)) map.panTo([e[0],e[1]], {animate:true});
   }
   function fitTrack(resetFollow){
     if(!map) return;
     if(resetFollow) follow = true;
-    const tr = trip.track;
+    const tr = (mapTrip || trip).track;
     if(tr.length > 1) map.fitBounds(L.latLngBounds(tr.map(p=>[p[0],p[1]])), {padding:[30,30], maxZoom:17});
     else if(tr.length === 1) map.setView([tr[0][0],tr[0][1]], 16);
   }
 
+  // ---------- trips screen ----------
+  const fmtDay = t => { const d = new Date(t);
+    return d.toLocaleDateString('uk-UA', {weekday:'short', day:'numeric', month:'short'}) + ' · ' +
+           d.toLocaleTimeString('uk-UA', {hour:'2-digit', minute:'2-digit'}); };
+  const fmtHM = t => new Date(t).toLocaleTimeString('uk-UA', {hour:'2-digit', minute:'2-digit'});
+  const fmtDur = s => { s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
+    return h ? `${h}:${String(m).padStart(2,'0')}` : `${m}<small>хв</small>`; };
+  function tripValues(t){
+    const u = uSpeed().toLowerCase(), d = t.dist/(mph?1609.34:1000);
+    const avg = t.moving > 0 ? t.dist/t.moving*3.6 : 0;
+    const cell = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+    return `<div class="card-v">${
+      cell('Відстань', `${d.toFixed(d<100?1:0)}<small>${uDist()}</small>`) +
+      cell('В русі', fmtDur(t.moving)) +
+      cell('Сер.', Math.round(conv(avg))) +
+      cell('Макс.', `${Math.round(conv(t.max))}<small>${u}</small>`) +
+      cell('Макс. G', t.maxG > 0.02 ? (+t.maxG).toFixed(2) : '—')
+    }</div>`;
+  }
+  function renderHistory(){
+    const od = (odo.m + odo.offset)/(mph?1609.34:1000);
+    const totS = Math.round(odo.s), th = Math.floor(totS/3600), tm = Math.floor(totS%3600/60);
+    let html = `<div class="card cur" style="border-color:var(--line)">
+      <div class="card-h"><span>Одометр</span><button class="mini" data-act="odo">Виставити як у машині</button></div>
+      <div class="odo">${od.toLocaleString('uk-UA', {minimumFractionDigits:1, maximumFractionDigits:1})}<small>${uDist()}</small></div>
+      <div class="card-h"><span>Поїздок в історії: <b>${history.length}</b></span><span>в русі всього: <b>${th} год ${tm} хв</b></span></div>
+    </div>
+    <div class="sec">Поточна поїздка</div>
+    <div class="card cur">
+      <div class="card-h"><span><b>${trip.created ? fmtDay(trip.created) : 'Ще не почалась'}</b>${trip.demo?'<span class="tag">ДЕМО</span>':''}</span></div>
+      ${tripValues(trip)}
+      <div class="card-a"><button class="mini acc" data-act="new">Завершити й почати нову</button><button class="mini" data-act="curmap">Карта</button></div>
+    </div>
+    <div class="sec">Історія</div>`;
+    if(!history.length) html += `<div class="empty-h">Тут з'являться завершені поїздки.<br>Поїздка зберігається сама, якщо між поїздками минуло понад 3 год, або коли натиснеш «Завершити й почати нову».</div>`;
+    history.forEach((t, i) => {
+      html += `<div class="card" data-i="${i}">
+        <div class="card-h"><span><b>${fmtDay(t.start)}</b> – ${fmtHM(t.end)}${t.demo?'<span class="tag">ДЕМО</span>':''}</span>
+          <button class="del" data-del="${i}" aria-label="Видалити">✕</button></div>
+        ${tripValues(t)}
+      </div>`;
+    });
+    $('histBody').innerHTML = html;
+  }
+  function openHistory(){ renderHistory(); $('histScreen').hidden = false; $('histBody').scrollTop = 0; }
+  $('histBody').addEventListener('click', e => {
+    const del = e.target.closest('[data-del]');
+    if(del){
+      const i = +del.dataset.del;
+      if(confirm('Видалити цю поїздку з історії?')){ history.splice(i,1); saveHistory(); renderHistory(); }
+      return;
+    }
+    const act = e.target.closest('[data-act]');
+    if(act){
+      const a = act.dataset.act;
+      if(a === 'new'){
+        if(trip.dist < 100 && !confirm('Поїздка коротша за 100 м — вона не збережеться. Почати нову?')) return;
+        newTrip(); renderHistory();
+      } else if(a === 'curmap') openMap();
+      else if(a === 'odo'){
+        const cur = ((odo.m + odo.offset)/(mph?1609.34:1000)).toFixed(0);
+        const v = prompt(`Введи пробіг з приладової панелі (${uDist()}):`, cur);
+        if(v === null) return;
+        const n = parseFloat(String(v).replace(',', '.').replace(/\s/g,''));
+        if(!isFinite(n) || n < 0){ alert('Потрібне число, наприклад 184320'); return; }
+        odo.offset = n*(mph?1609.34:1000) - odo.m;
+        saveAll(); renderHistory(); renderStats();
+      }
+      return;
+    }
+    const card = e.target.closest('[data-i]');
+    if(card){ const t = history[+card.dataset.i]; if(t) openMap(t); }
+  });
+
   // ---------- wiring ----------
   $('startBtn').onclick = () => { if(!audioCtx){ try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch{} } start(); };
   $('demoBtn').onclick = startDemo;
-  $('resetBtn').onclick = () => { trip=freshTrip(); if(watchId!==null||demoTimer) trip.startT=Date.now(); last=null; demoPos=null; store.set('trip',trip); renderStats(); };
-  $('mapBtn').onclick = openMap;
+  $('tripsBtn').onclick = openHistory;
+  $('closeHist').onclick = () => { $('histScreen').hidden = true; };
+  $('mapBtn').onclick = () => openMap();
   $('closeMap').onclick = closeMap;
   $('fitBtn').onclick = () => fitTrack(true);
-  addEventListener('pagehide', () => { store.set('trip', trip); saveImuCal(true); });
-  $('unitBtn').onclick = () => { mph=!mph; store.set('mph',mph); applyUnits(); };
+  addEventListener('pagehide', () => { saveAll(); saveImuCal(true); });
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState==='hidden') saveAll(); });
+  $('unitBtn').onclick = () => { mph=!mph; store.set('mph',mph); applyUnits(); if(!$('histScreen').hidden) renderHistory(); };
   $('imuBtn').onclick = () => setImu(!imu.on);
   $('hudBtn').onclick = () => { document.body.classList.toggle('hud'); $('hudBtn').classList.toggle('on'); };
   $('limit').value = limitKmh;
