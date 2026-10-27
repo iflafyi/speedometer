@@ -664,9 +664,27 @@ body.hud .controls{opacity:.35}
   function stopDemo(){ if(demoTimer){clearInterval(demoTimer); demoTimer=null; target=0; fix=null; $('demoBtn').classList.remove('on'); setStatus('','GPS вимкнено');} }
 
   // ---------- extras ----------
-  async function keepAwake(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
-  function releaseWake(){ try{ wakeLock && wakeLock.release(); }catch{} wakeLock=null; }
-  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && watchId!==null) keepAwake(); });
+  // Keep the screen on the whole time the site is open (not only while GPS runs).
+  // The browser drops the lock when the tab is hidden or the screen is locked,
+  // so we grab it again whenever the page becomes visible or is touched.
+  let wakeBusy = false;
+  async function keepAwake(){
+    if(!('wakeLock' in navigator) || document.visibilityState!=='visible') return;
+    if((wakeLock && !wakeLock.released) || wakeBusy) return;
+    wakeBusy = true;
+    try{
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', ()=>{ wakeLock=null; setTimeout(keepAwake, 500); });
+    }catch{ wakeLock=null; }
+    wakeBusy = false;
+  }
+  function releaseWake(){ /* screen stays on while the site is open */ }
+  document.addEventListener('visibilitychange', keepAwake);
+  window.addEventListener('focus', keepAwake);
+  window.addEventListener('pageshow', keepAwake);
+  ['pointerdown','touchstart','click'].forEach(ev=>document.addEventListener(ev, keepAwake, {passive:true}));
+  setInterval(keepAwake, 15000);
+  keepAwake();
 
   function beep(){
     try{
