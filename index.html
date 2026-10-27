@@ -38,6 +38,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .dot.ok{background:var(--ok);box-shadow:0 0 10px var(--ok)}
 .dot.wait{background:var(--accent);animation:pulse 1s infinite}
 .dot.err{background:var(--warn)}
+.awake{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid var(--dim);color:var(--dim);background:none;font-family:inherit}
+.awake.ok{border-color:var(--ok);color:var(--ok)}
+.awake.half{border-color:var(--accent);color:var(--accent)}
+.awake.bad{border-color:var(--warn);color:var(--warn)}
+#awakeVid{position:fixed;left:0;bottom:0;width:120px;height:120px;opacity:.01;pointer-events:none;z-index:-1}
 @keyframes pulse{50%{opacity:.3}}
 .unit-toggle{font-family:var(--f-display);background:var(--panel);border:1px solid var(--line);color:var(--fg);
   border-radius:8px;padding:6px 10px;font-size:13px;letter-spacing:.05em;cursor:pointer}
@@ -118,10 +123,12 @@ body.hud .controls{opacity:.35}
 </style>
 </head>
 <body>
+<video id="awakeVid" src="keepawake.mp4" muted playsinline loop preload="auto" aria-hidden="true"></video>
 <div class="app">
   <header>
     <div class="gps"><div class="dot" id="dot"></div><span id="gpsText">GPS вимкнено</span></div>
     <div class="head-btns">
+      <button class="awake" id="awakeBtn" aria-label="Стан екрана">☀ …</button>
       <button class="unit-toggle install" id="installBtn" hidden>⬇ ДОДАТИ</button>
       <button class="unit-toggle" id="mapBtn">КАРТА</button>
       <button class="unit-toggle" id="unitBtn" aria-label="Змінити одиниці">KM/H</button>
@@ -667,18 +674,49 @@ body.hud .controls{opacity:.35}
   // Keep the screen on the whole time the site is open (not only while GPS runs).
   // The browser drops the lock when the tab is hidden or the screen is locked,
   // so we grab it again whenever the page becomes visible or is touched.
-  let wakeBusy = false;
+  // Two layers: (1) native Screen Wake Lock; (2) if Chrome refuses it
+  // (e.g. Samsung power saving), a tiny invisible looping video, which Android
+  // also treats as "keep the screen on". The ☀ badge in the header shows the state.
+  let wakeBusy = false, wakeErr = '';
+  const vid = $('awakeVid');
+  function wakeBadge(){
+    const b=$('awakeBtn'); if(!b) return;
+    const nat = wakeLock && !wakeLock.released;
+    const v = vid && !vid.paused;
+    if(nat){ b.className='awake ok'; b.textContent='☀ ON'; }
+    else if(v){ b.className='awake half'; b.textContent='☀ ВІДЕО'; }
+    else { b.className='awake bad'; b.textContent='☀ OFF'; }
+  }
+  function playVideo(){
+    if(!vid || !vid.paused || document.visibilityState!=='visible') return;
+    vid.muted = true;
+    const p = vid.play(); if(p) p.then(wakeBadge).catch(wakeBadge);
+  }
   async function keepAwake(){
-    if(!('wakeLock' in navigator) || document.visibilityState!=='visible') return;
-    if((wakeLock && !wakeLock.released) || wakeBusy) return;
+    if(document.visibilityState!=='visible') return;
+    if(!('wakeLock' in navigator)){ wakeErr='браузер не підтримує Wake Lock'; playVideo(); wakeBadge(); return; }
+    if((wakeLock && !wakeLock.released) || wakeBusy){ wakeBadge(); return; }
     wakeBusy = true;
     try{
       wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', ()=>{ wakeLock=null; setTimeout(keepAwake, 500); });
-    }catch{ wakeLock=null; }
+      wakeErr = '';
+      wakeLock.addEventListener('release', ()=>{ wakeLock=null; wakeBadge(); setTimeout(keepAwake, 500); });
+    }catch(e){ wakeLock=null; wakeErr = (e && (e.name+': '+e.message)) || 'відмова'; }
     wakeBusy = false;
+    // Video fallback runs too — harmless when the native lock works, a lifesaver when it doesn't.
+    playVideo();
+    wakeBadge();
   }
   function releaseWake(){ /* screen stays on while the site is open */ }
+  if(vid){ ['play','pause','ended'].forEach(ev=>vid.addEventListener(ev, wakeBadge)); }
+  $('awakeBtn').addEventListener('click', ()=>{
+    keepAwake();
+    const nat = wakeLock && !wakeLock.released, v = vid && !vid.paused;
+    const m = $('msg');
+    if(nat){ m.className='msg'; m.textContent='Екран не згасатиме (Wake Lock активний).'; }
+    else if(v){ m.className='msg'; m.textContent='Wake Lock заборонено ('+wakeErr+'). Працює запасний спосіб через відео. Якщо екран все одно гасне — вимкни «Енергозбереження» на телефоні.'; }
+    else { m.className='msg err'; m.textContent='Не вдалося втримати екран ('+wakeErr+'). Вимкни «Енергозбереження» або постав «Час до вимкнення екрана» на 10 хв.'; }
+  });
   document.addEventListener('visibilitychange', keepAwake);
   window.addEventListener('focus', keepAwake);
   window.addEventListener('pageshow', keepAwake);
