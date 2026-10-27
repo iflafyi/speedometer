@@ -42,7 +42,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .awake.ok{border-color:var(--ok);color:var(--ok)}
 .awake.half{border-color:var(--accent);color:var(--accent)}
 .awake.bad{border-color:var(--warn);color:var(--warn)}
-#awakeVid{position:fixed;left:0;bottom:0;width:120px;height:120px;opacity:.01;pointer-events:none;z-index:-1}
+#awakeVid{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;opacity:.01;pointer-events:none;z-index:-1}
 @keyframes pulse{50%{opacity:.3}}
 .unit-toggle{font-family:var(--f-display);background:var(--panel);border:1px solid var(--line);color:var(--fg);
   border-radius:8px;padding:6px 10px;font-size:13px;letter-spacing:.05em;cursor:pointer}
@@ -684,13 +684,22 @@ body.hud .controls{opacity:.35}
     const nat = wakeLock && !wakeLock.released;
     const v = vid && !vid.paused;
     if(nat){ b.className='awake ok'; b.textContent='☀ ON'; }
+    else if(v && !vid.muted){ b.className='awake ok'; b.textContent='☀ ВІДЕО'; }
     else if(v){ b.className='awake half'; b.textContent='☀ ВІДЕО'; }
     else { b.className='awake bad'; b.textContent='☀ OFF'; }
   }
+  let userTouched = false;
   function playVideo(){
-    if(!vid || !vid.paused || document.visibilityState!=='visible') return;
-    vid.muted = true;
-    const p = vid.play(); if(p) p.then(wakeBadge).catch(wakeBadge);
+    if(!vid || document.visibilityState!=='visible') return;
+    // Browsers only keep the screen on for videos that have sound, so after the
+    // first touch (when un-muted playback is allowed) the silent track is played
+    // at a tiny volume. The track itself is pure silence.
+    const loud = userTouched && !(wakeLock && !wakeLock.released);
+    if(loud){ vid.muted=false; vid.volume=0.01; } else { vid.muted=true; }
+    if(vid.paused){
+      const p = vid.play();
+      if(p) p.then(wakeBadge).catch(()=>{ vid.muted=true; vid.play().then(wakeBadge).catch(wakeBadge); });
+    }
   }
   async function keepAwake(){
     if(document.visibilityState!=='visible') return;
@@ -709,18 +718,20 @@ body.hud .controls{opacity:.35}
   }
   function releaseWake(){ /* screen stays on while the site is open */ }
   if(vid){ ['play','pause','ended'].forEach(ev=>vid.addEventListener(ev, wakeBadge)); }
-  $('awakeBtn').addEventListener('click', ()=>{
-    keepAwake();
+  $('awakeBtn').addEventListener('click', async ()=>{
+    userTouched = true;
+    await keepAwake();
+    await new Promise(r=>setTimeout(r,300));
     const nat = wakeLock && !wakeLock.released, v = vid && !vid.paused;
     const m = $('msg');
     if(nat){ m.className='msg'; m.textContent='Екран не згасатиме (Wake Lock активний).'; }
-    else if(v){ m.className='msg'; m.textContent='Wake Lock заборонено ('+wakeErr+'). Працює запасний спосіб через відео. Якщо екран все одно гасне — вимкни «Енергозбереження» на телефоні.'; }
+    else if(v){ m.className='msg'; m.textContent='Браузер заборонив Wake Lock ('+wakeErr+'). Працює запасний спосіб через відео'+(vid.muted?' (поки без звуку — торкнись екрана)':'')+'. Найнадійніше — відкрити спідометр у Chrome.'; }
     else { m.className='msg err'; m.textContent='Не вдалося втримати екран ('+wakeErr+'). Вимкни «Енергозбереження» або постав «Час до вимкнення екрана» на 10 хв.'; }
   });
   document.addEventListener('visibilitychange', keepAwake);
   window.addEventListener('focus', keepAwake);
   window.addEventListener('pageshow', keepAwake);
-  ['pointerdown','touchstart','click'].forEach(ev=>document.addEventListener(ev, keepAwake, {passive:true}));
+  ['pointerdown','touchstart','click'].forEach(ev=>document.addEventListener(ev, ()=>{ userTouched=true; keepAwake(); }, {passive:true}));
   setInterval(keepAwake, 15000);
   keepAwake();
 
