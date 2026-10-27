@@ -1,6 +1,6 @@
 // Offline cache for GPS Спідометр.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'v6';
+const VERSION = 'v7';
 const APP_CACHE = 'speedo-app-' + VERSION;
 const CDN_CACHE = 'speedo-cdn';
 const TILE_CACHE = 'speedo-tiles';
@@ -14,8 +14,7 @@ const APP_FILES = [
   './icons/icon-512.png',
   './icons/maskable-512.png',
   './icons/apple-touch-icon.png',
-  './icons/favicon-64.png',
-  './keepawake.mp4'
+  './icons/favicon-64.png'
 ];
 const CDN_FILES = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
